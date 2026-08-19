@@ -1,0 +1,2064 @@
+# algebra.kl - 轻量 CAS(卡西欧 991 数学模式风格)
+# 表达式树 + 化简规则 + 特殊值表 + 自然显示 + 数值求值
+# 不做积分/求导(轻量设计)
+import std.memory
+import std.algebra
+import std.math
+#
+# 注意: 字段不能用 fn(关键字), 用 f
+# Expr 节点 kind:
+#   0 = 有理数 num/den
+#   1 = 整数幂 num^(en/ed)(如 2^(1/2) = √2)
+#   2 = π
+#   3 = e
+#   4 = 函数 fn(arg)(fn: 0=sin 1=cos 2=tan 3=arcsin 4=arccos 5=arctan 6=ln 7=log10 8=exp)
+#   5 = 和 a + b(a/b 为 Expr*)
+#   6 = 积 a * b
+#   7 = 负 -a
+
+pub struct Expr {
+    kind: int
+    num: BigInt
+    den: BigInt
+    en: BigInt
+    ed: BigInt
+    f: int
+    a: Expr*
+    b: Expr*
+}
+
+# ---- 构造 ----
+
+pub fn expr_rat(n: int, d: int) Expr {
+    Expr e = Expr()
+    e.kind = 0
+    e.num = std.algebra.bigint_from_i64(n)
+    e.den = std.algebra.bigint_from_i64(d)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    return e
+}
+
+pub fn expr_pow_raw(base: int, en0: int, ed0: int) Expr {
+    Expr e = Expr()
+    e.kind = 1
+    e.num = std.algebra.bigint_from_i64(base)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(en0)
+    e.ed = std.algebra.bigint_from_i64(ed0)
+    e.f = 0
+    return e
+}
+
+pub fn expr_pi() Expr {
+    Expr e = Expr()
+    e.kind = 2
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    return e
+}
+
+pub fn expr_e() Expr {
+    Expr e = Expr()
+    e.kind = 3
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    return e
+}
+
+# 分配子节点(挂到树上)
+pub fn expr_newchild(Expr e) Expr* {
+    Expr* p = std.memory.std_malloc(sizeof(Expr))
+    return p
+}
+
+pub fn expr_fn_raw(fnid: int, arg: Expr) Expr {
+    Expr e = Expr()
+    e.kind = 4
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = fnid
+    Expr* pa = std.memory.std_malloc(sizeof(Expr))
+    pa.kind = arg.kind
+    pa.num = arg.num
+    pa.den = arg.den
+    pa.en = arg.en
+    pa.ed = arg.ed
+    pa.f = arg.f
+    pa.a = arg.a
+    pa.b = arg.b
+    e.a = pa
+    return e
+}
+
+pub fn expr_add_raw(x: Expr, y: Expr) Expr {
+    Expr e = Expr()
+    e.kind = 5
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    Expr* pa = std.memory.std_malloc(sizeof(Expr))
+    pa.kind = x.kind
+    pa.num = x.num
+    pa.den = x.den
+    pa.en = x.en
+    pa.ed = x.ed
+    pa.f = x.f
+    pa.a = x.a
+    pa.b = x.b
+    e.a = pa
+    Expr* pb = std.memory.std_malloc(sizeof(Expr))
+    pb.kind = y.kind
+    pb.num = y.num
+    pb.den = y.den
+    pb.en = y.en
+    pb.ed = y.ed
+    pb.f = y.f
+    pb.a = y.a
+    pb.b = y.b
+    e.b = pb
+    return e
+}
+
+pub fn expr_mul_raw(x: Expr, y: Expr) Expr {
+    Expr e = Expr()
+    e.kind = 6
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    Expr* pa = std.memory.std_malloc(sizeof(Expr))
+    pa.kind = x.kind
+    pa.num = x.num
+    pa.den = x.den
+    pa.en = x.en
+    pa.ed = x.ed
+    pa.f = x.f
+    pa.a = x.a
+    pa.b = x.b
+    e.a = pa
+    Expr* pb = std.memory.std_malloc(sizeof(Expr))
+    pb.kind = y.kind
+    pb.num = y.num
+    pb.den = y.den
+    pb.en = y.en
+    pb.ed = y.ed
+    pb.f = y.f
+    pb.a = y.a
+    pb.b = y.b
+    e.b = pb
+    return e
+}
+
+# 减法: x - y = x + (-1)·y(对外自动化简版, 定义在化简器之后)
+# raw 版在 expr_mul_raw 之后定义(库代码无前置声明)
+
+# 负号节点 kind=7: -x(raw 构造, 诱导公式用)
+pub fn expr_neg_raw(x: Expr) Expr {
+    Expr e = Expr()
+    e.kind = 7
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    Expr* pa = std.memory.std_malloc(sizeof(Expr))
+    pa.kind = x.kind
+    pa.num = x.num
+    pa.den = x.den
+    pa.en = x.en
+    pa.ed = x.ed
+    pa.f = x.f
+    pa.a = x.a
+    pa.b = x.b
+    e.a = pa
+    return e
+}
+
+# 除法节点 kind=8: x / y(符号保持, 高斯消元用; 常数/常数由 simplify 化简)
+pub fn expr_div_raw(x: Expr, y: Expr) Expr {
+    Expr e = Expr()
+    e.kind = 8
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    Expr* pa = std.memory.std_malloc(sizeof(Expr))
+    pa.kind = x.kind
+    pa.num = x.num
+    pa.den = x.den
+    pa.en = x.en
+    pa.ed = x.ed
+    pa.f = x.f
+    pa.a = x.a
+    pa.b = x.b
+    e.a = pa
+    Expr* pb = std.memory.std_malloc(sizeof(Expr))
+    pb.kind = y.kind
+    pb.num = y.num
+    pb.den = y.den
+    pb.en = y.en
+    pb.ed = y.ed
+    pb.f = y.f
+    pb.a = y.a
+    pb.b = y.b
+    e.b = pb
+    return e
+}
+
+# ---- 结构比较(用于合并同类项) ----
+
+pub fn expr_equal(x: Expr, y: Expr) int {
+    if (x.kind != y.kind) {
+        return 0
+    }
+    if (x.kind == 0) {
+        int c1 = std.algebra.bigint_compare(&x.num, &y.num)
+        int c2 = std.algebra.bigint_compare(&x.den, &y.den)
+        if (c1 == 0 && c2 == 0) {
+            return 1
+        }
+        return 0
+    }
+    if (x.kind == 1) {
+        int c1 = std.algebra.bigint_compare(&x.num, &y.num)
+        int c2 = std.algebra.bigint_compare(&x.en, &y.en)
+        int c3 = std.algebra.bigint_compare(&x.ed, &y.ed)
+        if (c1 == 0 && c2 == 0 && c3 == 0) {
+            return 1
+        }
+        return 0
+    }
+    if (x.kind == 2 || x.kind == 3) {
+        return 1
+    }
+    if (x.kind == 4) {
+        if (x.f != y.f) {
+            return 0
+        }
+        return expr_equal(*x.a, *y.a)
+    }
+    return 0
+}
+
+# ---- 化简 ----
+
+# 有理数约分(BigInt 版: gcd 约分 + 分母符号归一)
+pub fn rat_simplify(num: BigInt, den: BigInt) Expr {
+    Expr e = Expr()
+    e.kind = 0
+    int denz = std.algebra.bigint_is_zero(&den)
+    if (denz == 1) {
+        e.num = std.algebra.bigint_from_i64(0)
+        e.den = std.algebra.bigint_from_i64(1)
+        return e
+    }
+    # 分母 < 0 → 分子分母同时取反
+    int dneg = std.algebra.bigint_is_negative(&den)
+    BigInt n2 = num
+    BigInt d2 = den
+    if (dneg == 1) {
+        n2 = std.algebra.bigint_negate(&num)
+        d2 = std.algebra.bigint_negate(&den)
+    }
+    BigInt g = std.algebra.bigint_gcd(&n2, &d2)
+    BigInt one = std.algebra.bigint_from_i64(1)
+    int g1 = std.algebra.bigint_compare(&g, &one)
+    if (g1 == 0) {
+        e.num = n2
+        e.den = d2
+    } else {
+        e.num = std.algebra.bigint_divide(&n2, &g)
+        e.den = std.algebra.bigint_divide(&d2, &g)
+    }
+    return e
+}
+
+# 幂节点构造(BigInt 字段版, 化简器内部用)
+pub fn expr_pow_raw_b(base: BigInt, en0: BigInt, ed0: BigInt) Expr {
+    Expr e = Expr()
+    e.kind = 1
+    e.num = base
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = en0
+    e.ed = ed0
+    e.f = 0
+    return e
+}
+
+
+# 有理数构造(BigInt 字段版, 化简器内部用)
+pub fn expr_rat_b(num: BigInt, den: BigInt) Expr {
+    Expr e = Expr()
+    e.kind = 0
+    e.num = num
+    e.den = den
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    return e
+}
+
+# √ 去平方因子: base^(en/ed), en=1 时 √(k²·c) = k√c(BigInt 版)
+pub fn pow_simplify(base: BigInt, en0: BigInt, ed0: BigInt) Expr {
+    # 指数约分: 2^(2/2) → 2^1 → 2
+    BigInt ge = std.algebra.bigint_gcd(&en0, &ed0)
+    BigInt one = std.algebra.bigint_from_i64(1)
+    int g1 = std.algebra.bigint_compare(&ge, &one)
+    if (g1 > 0) {
+        en0 = std.algebra.bigint_divide(&en0, &ge)
+        ed0 = std.algebra.bigint_divide(&ed0, &ge)
+    }
+    # 整数指数: base^1 直接是整数
+    BigInt ed1 = std.algebra.bigint_from_i64(1)
+    int edc = std.algebra.bigint_compare(&ed0, &ed1)
+    if (edc == 0) {
+        # v = base^en0(整数幂)
+        BigInt v = std.algebra.bigint_from_i64(1)
+        BigInt z = std.algebra.bigint_from_i64(0)
+        BigInt i = std.algebra.bigint_from_i64(0)
+        int cmp = std.algebra.bigint_compare(&i, &en0)
+        while (cmp < 0) {
+            v = std.algebra.bigint_multiply(&v, &base)
+            i = std.algebra.bigint_add(&i, &one)
+            cmp = std.algebra.bigint_compare(&i, &en0)
+        }
+        Expr r = Expr()
+        r.kind = 0
+        r.num = v
+        r.den = one
+        return r
+    }
+    # 平方根: 提出平方因子为系数 (√8 = 2·√2)
+    BigInt en1 = std.algebra.bigint_from_i64(1)
+    BigInt ed2 = std.algebra.bigint_from_i64(2)
+    int enc = std.algebra.bigint_compare(&en0, &en1)
+    int edc2 = std.algebra.bigint_compare(&ed0, &ed2)
+    if (enc == 0 && edc2 == 0) {
+        BigInt k = std.algebra.bigint_from_i64(2)
+        int coef = 1
+        BigInt bb = base
+        BigInt kk2 = std.algebra.bigint_multiply(&k, &k)
+        int kle = std.algebra.bigint_compare(&kk2, &bb)
+        while (kle <= 0) {
+            BigInt kk = std.algebra.bigint_multiply(&k, &k)
+            BigInt r = std.algebra.bigint_mod(&bb, &kk)
+            int rz = std.algebra.bigint_is_zero(&r)
+            if (rz == 1) {
+                bb = std.algebra.bigint_divide(&bb, &kk)
+                i64 kv = std.algebra.bigint_to_i64(&k)
+                coef = coef * kv
+            } else {
+                k = std.algebra.bigint_add(&k, &one)
+            }
+            BigInt kk3 = std.algebra.bigint_multiply(&k, &k)
+            kle = std.algebra.bigint_compare(&kk3, &bb)
+        }
+        BigInt b1 = std.algebra.bigint_from_i64(1)
+        int b1c = std.algebra.bigint_compare(&bb, &b1)
+        if (coef > 1) {
+            if (b1c == 0) {
+                return expr_rat(coef, 1)
+            }
+            return expr_mul_raw(expr_rat(coef, 1), expr_pow_raw_b(bb, en1, ed2))
+        }
+        if (b1c == 0) {
+            return expr_rat(1, 1)
+        }
+        return expr_pow_raw_b(bb, en1, ed2)
+    }
+    # 立方根: 提出立方因子为系数 (∛8 = 2, ∛16 = 2·∛2)
+    BigInt ed3 = std.algebra.bigint_from_i64(3)
+    int edc3 = std.algebra.bigint_compare(&ed0, &ed3)
+    if (enc == 0 && edc3 == 0) {
+        BigInt k3 = std.algebra.bigint_from_i64(2)
+        int coef3 = 1
+        BigInt bb3 = base
+        BigInt kkk0 = std.algebra.bigint_multiply(&k3, &k3)
+        BigInt kkk1 = std.algebra.bigint_multiply(&kkk0, &k3)
+        int kle3 = std.algebra.bigint_compare(&kkk1, &bb3)
+        while (kle3 <= 0) {
+            BigInt k3s = std.algebra.bigint_multiply(&k3, &k3)
+            BigInt kkk = std.algebra.bigint_multiply(&k3s, &k3)
+            BigInt r3 = std.algebra.bigint_mod(&bb3, &kkk)
+            int r3z = std.algebra.bigint_is_zero(&r3)
+            if (r3z == 1) {
+                bb3 = std.algebra.bigint_divide(&bb3, &kkk)
+                i64 k3v = std.algebra.bigint_to_i64(&k3)
+                coef3 = coef3 * k3v
+            } else {
+                k3 = std.algebra.bigint_add(&k3, &one)
+            }
+            BigInt k3a = std.algebra.bigint_multiply(&k3, &k3)
+            BigInt k3b = std.algebra.bigint_multiply(&k3a, &k3)
+            kle3 = std.algebra.bigint_compare(&k3b, &bb3)
+        }
+        BigInt b31 = std.algebra.bigint_from_i64(1)
+        int b31c = std.algebra.bigint_compare(&bb3, &b31)
+        if (coef3 > 1) {
+            if (b31c == 0) {
+                return expr_rat(coef3, 1)
+            }
+            return expr_mul_raw(expr_rat(coef3, 1), expr_pow_raw_b(bb3, en1, ed3))
+        }
+        if (b31c == 0) {
+            return expr_rat(1, 1)
+        }
+        return expr_pow_raw_b(bb3, en1, ed3)
+    }
+    return expr_pow_raw_b(base, en0, ed0)
+}
+
+# 特殊值表: 函数在已知参数下的精确值
+# 返回 1 表示已化简, 0 表示保持原样
+pub fn fn_special(fnid: int, arg: Expr, out: Expr*) int {
+    # ---- π 倍数识别: arg = (num/den)·π ----
+    int pi_num = 0
+    int pi_den = 1
+    int is_pi = 0
+    if (arg.kind == 2) {
+        pi_num = 1
+        pi_den = 1
+        is_pi = 1
+    }
+    if (arg.kind == 8) {
+        Expr pa = *arg.a
+        Expr pb = *arg.b
+        if (pa.kind == 2 && pb.kind == 0) {
+            pi_num = 1
+            pi_den = std.algebra.bigint_to_i64(&pb.num)
+            is_pi = 1
+        }
+        # (3π)/2 形式: a = mul(3, π)
+        if (pa.kind == 6 && pb.kind == 0) {
+            Expr pma = *pa.a
+            Expr pmb = *pa.b
+            if (pma.kind == 0 && pmb.kind == 2) {
+                pi_num = std.algebra.bigint_to_i64(&pma.num)
+                pi_den = std.algebra.bigint_to_i64(&pma.den) * std.algebra.bigint_to_i64(&pb.num)
+                is_pi = 1
+            }
+            if (pma.kind == 2 && pmb.kind == 0) {
+                pi_num = std.algebra.bigint_to_i64(&pmb.num)
+                pi_den = std.algebra.bigint_to_i64(&pmb.den) * std.algebra.bigint_to_i64(&pb.num)
+                is_pi = 1
+            }
+        }
+    }
+    if (arg.kind == 6) {
+        Expr pa = *arg.a
+        Expr pb = *arg.b
+        if (pa.kind == 0 && pb.kind == 2) {
+            pi_num = std.algebra.bigint_to_i64(&pa.num)
+            pi_den = std.algebra.bigint_to_i64(&pa.den)
+            is_pi = 1
+        }
+        if (pa.kind == 2 && pb.kind == 0) {
+            pi_num = std.algebra.bigint_to_i64(&pb.num)
+            pi_den = std.algebra.bigint_to_i64(&pb.den)
+            is_pi = 1
+        }
+    }
+    # sin(0) = 0
+    if (fnid == 0 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        out.kind = 0
+        out.num = std.algebra.bigint_from_i64(0)
+        out.den = std.algebra.bigint_from_i64(1)
+        return 1
+    }
+    # cos(0) = 1
+    if (fnid == 1 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        out.kind = 0
+        out.num = std.algebra.bigint_from_i64(1)
+        out.den = std.algebra.bigint_from_i64(1)
+        return 1
+    }
+    # ---- sin/cos/tan 的 π 倍数特殊值(θ = (pi_num/pi_den)·π) ----
+    # ---- sin/cos/tan 的 π 倍数特殊值 + 诱导公式(周期/补角/负角缩减) ----
+    # θ = (pi_num/pi_den)·π, 任意 pi_num: 归一到基本角(0, π/6, π/4, π/3, π/2)
+    if (is_pi == 1 && (fnid == 0 || fnid == 1 || fnid == 2)) {
+        int den = pi_den
+        if (den == 0) {
+            den = 1
+        }
+        int sign = 1
+        int n = 0
+        if (fnid == 2) {
+            # tan 周期 π: n = pi_num mod den
+            n = pi_num % den
+            if (n < 0) {
+                n = n + den
+            }
+        } else {
+            # sin/cos 周期 2π: n = pi_num mod 2·den, 归一非负
+            n = pi_num % (2 * den)
+            if (n < 0) {
+                n = n + 2 * den
+            }
+            # π..2π: 翻转符号, 减 π
+            if (n >= den) {
+                sign = -sign
+                n = n - den
+            }
+        }
+        # 补角(π/2..π): sin(π-x)=sin x, cos(π-x)=-cos x, tan(π-x)=-tan x
+        if (n * 2 > den) {
+            n = den - n
+            if (fnid == 1 || fnid == 2) {
+                sign = -sign
+            }
+        }
+        # 基本角查表(结果 = sign × 值)
+        int hit = 0
+        Expr val = expr_rat(0, 1)
+        if (n == 0) {
+            if (fnid == 0) {
+                val = expr_rat(0, 1)
+            }
+            if (fnid == 1) {
+                val = expr_rat(1, 1)
+            }
+            if (fnid == 2) {
+                val = expr_rat(0, 1)
+            }
+            hit = 1
+        }
+        if (n * 6 == den) {
+            # 1/6
+            if (fnid == 0) {
+                val = expr_rat(1, 2)
+            }
+            if (fnid == 1) {
+                val = expr_div_raw(expr_pow_raw(3, 1, 2), expr_rat(2, 1))
+            }
+            if (fnid == 2) {
+                val = expr_div_raw(expr_pow_raw(3, 1, 2), expr_rat(3, 1))
+            }
+            hit = 1
+        }
+        if (n * 4 == den) {
+            # 1/4
+            if (fnid == 0) {
+                val = expr_div_raw(expr_pow_raw(2, 1, 2), expr_rat(2, 1))
+            }
+            if (fnid == 1) {
+                val = expr_div_raw(expr_pow_raw(2, 1, 2), expr_rat(2, 1))
+            }
+            if (fnid == 2) {
+                val = expr_rat(1, 1)
+            }
+            hit = 1
+        }
+        if (n * 3 == den) {
+            # 1/3
+            if (fnid == 0) {
+                val = expr_div_raw(expr_pow_raw(3, 1, 2), expr_rat(2, 1))
+            }
+            if (fnid == 1) {
+                val = expr_rat(1, 2)
+            }
+            if (fnid == 2) {
+                val = expr_pow_raw(3, 1, 2)
+            }
+            hit = 1
+        }
+        if (n * 2 == den) {
+            # 1/2
+            if (fnid == 0) {
+                val = expr_rat(1, 1)
+            }
+            if (fnid == 1) {
+                val = expr_rat(0, 1)
+            }
+            if (fnid == 2) {
+                return 0
+            }
+            hit = 1
+        }
+        if (hit == 1) {
+            if (sign == -1) {
+                # 常数直接取负(kind0 有理数), 表达式用负号节点
+                if (val.kind == 0) {
+                    BigInt vn = std.algebra.bigint_negate(&val.num)
+                    *out = expr_rat_b(vn, val.den)
+                } else {
+                    *out = expr_neg_raw(val)
+                }
+            } else {
+                *out = val
+            }
+            return 1
+        }
+        return 0
+    }
+    # ---- 反函数特殊值 ----
+    # arcsin(1) = π/2, arcsin(0) = 0, arcsin(1/2) = π/6, arcsin(√2/2) = π/4
+    if (fnid == 3) {
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 1 && std.algebra.bigint_to_i64(&arg.den) == 1) {
+            *out = expr_div_raw(expr_pi(), expr_rat(2, 1))
+            return 1
+        }
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+            *out = expr_rat(0, 1)
+            return 1
+        }
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 1 && std.algebra.bigint_to_i64(&arg.den) == 2) {
+            *out = expr_div_raw(expr_pi(), expr_rat(6, 1))
+            return 1
+        }
+        if (arg.kind == 8) {
+            Expr pa = *arg.a
+            Expr pb = *arg.b
+            if (pa.kind == 1 && std.algebra.bigint_to_i64(&pa.num) == 2 && std.algebra.bigint_to_i64(&pa.en) == 1 && std.algebra.bigint_to_i64(&pa.ed) == 2 && pb.kind == 0 && std.algebra.bigint_to_i64(&pb.num) == 2) {
+                *out = expr_div_raw(expr_pi(), expr_rat(4, 1))
+                return 1
+            }
+        }
+    }
+    # arccos(0) = π/2, arccos(1) = 0, arccos(1/2) = π/3
+    if (fnid == 4) {
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+            *out = expr_div_raw(expr_pi(), expr_rat(2, 1))
+            return 1
+        }
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 1 && std.algebra.bigint_to_i64(&arg.den) == 1) {
+            *out = expr_rat(0, 1)
+            return 1
+        }
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 1 && std.algebra.bigint_to_i64(&arg.den) == 2) {
+            *out = expr_div_raw(expr_pi(), expr_rat(3, 1))
+            return 1
+        }
+    }
+    # arctan(1) = π/4, arctan(0) = 0, arctan(√3/3) = π/6
+    if (fnid == 5) {
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 1 && std.algebra.bigint_to_i64(&arg.den) == 1) {
+            *out = expr_div_raw(expr_pi(), expr_rat(4, 1))
+            return 1
+        }
+        if (arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+            *out = expr_rat(0, 1)
+            return 1
+        }
+        if (arg.kind == 8) {
+            Expr pa = *arg.a
+            Expr pb = *arg.b
+            if (pa.kind == 1 && std.algebra.bigint_to_i64(&pa.num) == 3 && std.algebra.bigint_to_i64(&pa.en) == 1 && std.algebra.bigint_to_i64(&pa.ed) == 2 && pb.kind == 0 && std.algebra.bigint_to_i64(&pb.num) == 3) {
+                *out = expr_div_raw(expr_pi(), expr_rat(6, 1))
+                return 1
+            }
+        }
+    }
+    # ln(e) = 1, log10(10) = 1, exp(0) = 1
+    if (fnid == 6 && arg.kind == 3) {
+        *out = expr_rat(1, 1)
+        return 1
+    }
+    if (fnid == 7 && arg.kind == 1 && std.algebra.bigint_to_i64(&arg.num) == 10 && std.algebra.bigint_to_i64(&arg.en) == 1 && std.algebra.bigint_to_i64(&arg.ed) == 1) {
+        *out = expr_rat(1, 1)
+        return 1
+    }
+    # log10(10): 10^1 已化简为常数 10(kind0)
+    if (fnid == 7 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 10 && std.algebra.bigint_to_i64(&arg.den) == 1) {
+        *out = expr_rat(1, 1)
+        return 1
+    }
+    if (fnid == 8 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        *out = expr_rat(1, 1)
+        return 1
+    }
+    # ---- 双曲函数特殊值 ----
+    # sinh(0) = 0, cosh(0) = 1, tanh(0) = 0, arsinh(0) = 0
+    if (fnid == 9 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        *out = expr_rat(0, 1)
+        return 1
+    }
+    if (fnid == 10 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        *out = expr_rat(1, 1)
+        return 1
+    }
+    if (fnid == 11 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        *out = expr_rat(0, 1)
+        return 1
+    }
+    if (fnid == 12 && arg.kind == 0 && std.algebra.bigint_to_i64(&arg.num) == 0) {
+        *out = expr_rat(0, 1)
+        return 1
+    }
+    return 0
+}
+
+# ---- 自动化简(合并同类项) ----
+# 项数组(模块级共享, 单线程 demo 安全): 每项 = 系数(g_cn/g_cd) × 核心(g_cores)
+# 核心 kind=99 表示纯常数(核心为空, 系数即值)
+[24]Expr g_cores
+[24]BigInt g_cn
+[24]BigInt g_cd
+
+# 展平和: 递归收集项到数组, 返回项数
+# sn/sd = 系数缩放(BigInt, 嵌套和的系数提取: c×(a+b) 每项系数 ×c)
+pub fn collect_add(e: Expr, n: int, sn: BigInt, sd: BigInt) int {
+    if (e.kind == 5) {
+        n = collect_add(*e.a, n, sn, sd)
+        n = collect_add(*e.b, n, sn, sd)
+        return n
+    }
+    if (e.kind == 0) {
+        g_cores[n].kind = 99
+        BigInt p1 = std.algebra.bigint_multiply(&e.num, &sn)
+        g_cn[n] = p1
+        BigInt p2 = std.algebra.bigint_multiply(&e.den, &sd)
+        g_cd[n] = p2
+        return n + 1
+    }
+    # 常数系数提取: c × core → 系数 c, 核心 core(支持减法 -1·y 合并同类项)
+    if (e.kind == 6) {
+        Expr ca = *e.a
+        if (ca.kind == 0) {
+            Expr cb = *e.b
+            if (cb.kind == 0) {
+                # 常数 × 常数: 直接合并进常数项
+                g_cores[n].kind = 99
+                BigInt m1 = std.algebra.bigint_multiply(&ca.num, &cb.num)
+                BigInt m2 = std.algebra.bigint_multiply(&m1, &sn)
+                g_cn[n] = m2
+                BigInt d1 = std.algebra.bigint_multiply(&ca.den, &cb.den)
+                BigInt d2 = std.algebra.bigint_multiply(&d1, &sd)
+                g_cd[n] = d2
+                return n + 1
+            }
+            # 嵌套和: 递归展平(每项系数 ×ca), 避免 core 是和造成嵌套/环
+            if (cb.kind == 5) {
+                BigInt ns = std.algebra.bigint_multiply(&sn, &ca.num)
+                BigInt nd = std.algebra.bigint_multiply(&sd, &ca.den)
+                return collect_add(cb, n, ns, nd)
+            }
+            g_cores[n] = cb
+            BigInt p3 = std.algebra.bigint_multiply(&ca.num, &sn)
+            g_cn[n] = p3
+            BigInt p4 = std.algebra.bigint_multiply(&ca.den, &sd)
+            g_cd[n] = p4
+            return n + 1
+        }
+    }
+    g_cores[n] = e
+    g_cn[n] = sn
+    g_cd[n] = sd
+    return n + 1
+}
+
+# 合并同类项 + 重建和, 返回化简后的 Expr(系数全 BigInt)
+pub fn merge_add(n: int) Expr {
+    # 1. 合并常数项到 index 0(通分累加)
+    int i = 1
+    while (i < n) {
+        if (g_cores[i].kind == 99) {
+            BigInt a1 = std.algebra.bigint_multiply(&g_cn[0], &g_cd[i])
+            BigInt a2 = std.algebra.bigint_multiply(&g_cn[i], &g_cd[0])
+            BigInt nn = std.algebra.bigint_add(&a1, &a2)
+            BigInt dd = std.algebra.bigint_multiply(&g_cd[0], &g_cd[i])
+            g_cn[0] = nn
+            g_cd[0] = dd
+            g_cores[i].kind = 98
+            g_cn[i] = std.algebra.bigint_from_i64(0)
+        }
+        i = i + 1
+    }
+    # 2. 同类项合并(expr_equal 比较核心, 系数相加); j 从 0 开始(index 0 也要参与)
+    int j = 0
+    while (j < n) {
+        if (g_cores[j].kind == 98) {
+            j = j + 1
+            continue
+        }
+        int k = j + 1
+        while (k < n) {
+            if (g_cores[k].kind != 98 && expr_equal(g_cores[j], g_cores[k])) {
+                BigInt b1 = std.algebra.bigint_multiply(&g_cn[j], &g_cd[k])
+                BigInt b2 = std.algebra.bigint_multiply(&g_cn[k], &g_cd[j])
+                BigInt nn = std.algebra.bigint_add(&b1, &b2)
+                BigInt dd = std.algebra.bigint_multiply(&g_cd[j], &g_cd[k])
+                g_cn[j] = nn
+                g_cd[j] = dd
+                g_cores[k].kind = 98
+                g_cn[k] = std.algebra.bigint_from_i64(0)
+            }
+            k = k + 1
+        }
+        j = j + 1
+    }
+    # 3. 重建: 系数约分, 跳过删除/零项
+    Expr r = Expr()
+    r.kind = 0
+    r.num = std.algebra.bigint_from_i64(0)
+    r.den = std.algebra.bigint_from_i64(1)
+    int first = -1
+    int m = 0
+    while (m < n) {
+        int zc = 0
+        if (g_cores[m].kind != 98) {
+            zc = std.algebra.bigint_is_zero(&g_cn[m])
+        }
+        if (g_cores[m].kind == 98 || zc == 1) {
+            m = m + 1
+            continue
+        }
+        Expr co = rat_simplify(g_cn[m], g_cd[m])
+        int coz = std.algebra.bigint_is_zero(&co.num)
+        if (coz == 1) {
+            m = m + 1
+            continue
+        }
+        Expr term = Expr()
+        if (g_cores[m].kind == 99) {
+            term = co
+        } else {
+            BigInt one = std.algebra.bigint_from_i64(1)
+            int c1 = std.algebra.bigint_compare(&co.num, &one)
+            int c2 = std.algebra.bigint_compare(&co.den, &one)
+            if (c1 == 0 && c2 == 0) {
+                term = g_cores[m]
+            } else {
+                term = expr_mul_raw(co, g_cores[m])
+            }
+        }
+        if (first < 0) {
+            r = term
+            first = 1
+        } else {
+            r = expr_add_raw(r, term)
+        }
+        m = m + 1
+    }
+    if (first < 0) {
+        return expr_rat(0, 1)
+    }
+    return r
+}
+
+# 化简: 递归 + 和合并 + 积常数吸收 + 特殊值表
+pub fn simplify(e: Expr) Expr {
+    if (e.kind == 0) {
+        return rat_simplify(e.num, e.den)
+    }
+    if (e.kind == 1) {
+        return pow_simplify(e.num, e.en, e.ed)
+    }
+    if (e.kind == 5) {
+        Expr la = simplify(*e.a)
+        Expr rb = simplify(*e.b)
+        Expr sum = expr_add_raw(la, rb)
+        BigInt one_c = std.algebra.bigint_from_i64(1)
+        int n = collect_add(sum, 0, one_c, one_c)
+        return merge_add(n)
+    }
+    if (e.kind == 6) {
+        Expr la = simplify(*e.a)
+        Expr rb = simplify(*e.b)
+        # 常数 × 常数 → 约分
+        if (la.kind == 0 && rb.kind == 0) {
+            BigInt pn = std.algebra.bigint_multiply(&la.num, &rb.num)
+            BigInt pd = std.algebra.bigint_multiply(&la.den, &rb.den)
+            return rat_simplify(pn, pd)
+        }
+        # 0 × x = 0
+        if (la.kind == 0 && std.algebra.bigint_is_zero(&la.num) == 1) {
+            return expr_rat(0, 1)
+        }
+        if (rb.kind == 0 && std.algebra.bigint_is_zero(&rb.num) == 1) {
+            return expr_rat(0, 1)
+        }
+        # 1 × x = x
+        if (la.kind == 0) {
+            BigInt c1 = std.algebra.bigint_from_i64(1)
+            int lc1 = std.algebra.bigint_compare(&la.num, &c1)
+            int lc2 = std.algebra.bigint_compare(&la.den, &c1)
+            if (lc1 == 0 && lc2 == 0) {
+                return rb
+            }
+        }
+        if (rb.kind == 0) {
+            BigInt c1b = std.algebra.bigint_from_i64(1)
+            int rc1 = std.algebra.bigint_compare(&rb.num, &c1b)
+            int rc2 = std.algebra.bigint_compare(&rb.den, &c1b)
+            if (rc1 == 0 && rc2 == 0) {
+                return la
+            }
+        }
+        # 幂 × 幂 同底同分母: 指数相加(√2 × √2 = 2)
+        if (la.kind == 1 && rb.kind == 1) {
+            int bc = std.algebra.bigint_compare(&la.num, &rb.num)
+            int ec = std.algebra.bigint_compare(&la.ed, &rb.ed)
+            if (bc == 0 && ec == 0) {
+                BigInt en = std.algebra.bigint_add(&la.en, &rb.en)
+                return pow_simplify(la.num, en, la.ed)
+            }
+        }
+        # 常数系数提出: c × (d × x) = (c·d) × x
+        if (la.kind == 0 && rb.kind == 6) {
+            Expr rba = simplify(*rb.a)
+            if (rba.kind == 0) {
+                BigInt pn = std.algebra.bigint_multiply(&la.num, &rba.num)
+                BigInt pd = std.algebra.bigint_multiply(&la.den, &rba.den)
+                Expr co = rat_simplify(pn, pd)
+                BigInt one_c2 = std.algebra.bigint_from_i64(1)
+                int cc1 = std.algebra.bigint_compare(&co.num, &one_c2)
+                int cc2 = std.algebra.bigint_compare(&co.den, &one_c2)
+                if (cc1 == 0 && cc2 == 0) {
+                    return simplify(*rb.b)
+                }
+                return expr_mul_raw(co, *rb.b)
+            }
+        }
+        if (rb.kind == 0 && la.kind == 6) {
+            Expr lab = simplify(*la.a)
+            if (lab.kind == 0) {
+                BigInt pn2 = std.algebra.bigint_multiply(&rb.num, &lab.num)
+                BigInt pd2 = std.algebra.bigint_multiply(&rb.den, &lab.den)
+                Expr co = rat_simplify(pn2, pd2)
+                BigInt one_c3 = std.algebra.bigint_from_i64(1)
+                int cc3 = std.algebra.bigint_compare(&co.num, &one_c3)
+                int cc4 = std.algebra.bigint_compare(&co.den, &one_c3)
+                if (cc3 == 0 && cc4 == 0) {
+                    return simplify(*la.b)
+                }
+                return expr_mul_raw(co, *la.b)
+            }
+        }
+        return expr_mul_raw(la, rb)
+    }
+    if (e.kind == 4) {
+        Expr* res = std.memory.std_malloc(sizeof(Expr))
+        int ok2 = fn_special(e.f, *e.a, res)
+        if (ok2 == 1) {
+            return *res
+        }
+        # 函数参数先化简再保留
+        Expr sa = simplify(*e.a)
+        return expr_fn_raw(e.f, sa)
+    }
+    if (e.kind == 8) {
+        # 常数 ÷ 常数 → 精确分数
+        Expr la = simplify(*e.a)
+        Expr rb = simplify(*e.b)
+        if (la.kind == 0 && rb.kind == 0) {
+            BigInt qn = std.algebra.bigint_multiply(&la.num, &rb.den)
+            BigInt qd = std.algebra.bigint_multiply(&la.den, &rb.num)
+            return rat_simplify(qn, qd)
+        }
+        return expr_div_raw(la, rb)
+    }
+    return e
+}
+
+# ---- 泰勒级数(近似值, 最快收敛) ----
+# sin/cos/exp/ln/atan/√ 全部自实现级数, 不依赖 libm
+
+pub fn taylor_sin(x: f64) f64 {
+    f64 x2 = x * x
+    f64 term = x
+    f64 sum = x
+    int i = 1
+    while (i < 12) {
+        f64 d1 = 2 * i
+        f64 d2 = 2 * i + 1
+        term = -term * x2 / (d1 * d2)
+        sum = sum + term
+        i = i + 1
+    }
+    return sum
+}
+
+pub fn taylor_cos(x: f64) f64 {
+    f64 x2 = x * x
+    f64 term = 1.0
+    f64 sum = 1.0
+    int i = 1
+    while (i < 12) {
+        f64 d1 = 2 * i - 1
+        f64 d2 = 2 * i
+        term = -term * x2 / (d1 * d2)
+        sum = sum + term
+        i = i + 1
+    }
+    return sum
+}
+
+pub fn taylor_exp(x: f64) f64 {
+    f64 term = 1.0
+    f64 sum = 1.0
+    int i = 1
+    while (i < 20) {
+        f64 fi = i
+        term = term * x / fi
+        sum = sum + term
+        i = i + 1
+    }
+    return sum
+}
+
+# ln(x) = ln(m) + k·ln2(m ∈ [1,2), 范围缩小后 atanh 级数收敛快)
+# atanh 级数: ln(m) = 2·(z + z³/3 + z⁵/5 + ...), z=(m-1)/(m+1) ∈ [0,1/3]
+pub fn taylor_ln(x: f64) f64 {
+    f64 m = x
+    f64 k = 0.0
+    while (m >= 2.0) {
+        m = m / 2.0
+        k = k + 1.0
+    }
+    while (m < 1.0) {
+        m = m * 2.0
+        k = k - 1.0
+    }
+    f64 z = (m - 1.0) / (m + 1.0)
+    f64 z2 = z * z
+    f64 term = z
+    f64 sum = z
+    int i = 1
+    while (i < 30) {
+        term = term * z2
+        f64 d = 2 * i + 1
+        sum = sum + term / d
+        i = i + 1
+    }
+    return 2.0 * sum + k * 0.6931471805599453
+}
+
+# arctan(x) = Σ(-1)ⁿx^(2n+1)/(2n+1), |x|>1 用 arctan(x)=π/2-arctan(1/x)
+pub fn taylor_atan(x: f64) f64 {
+    f64 ax = x
+    if (ax < 0) {
+        ax = -ax
+    }
+    if (ax > 1.0) {
+        return 1.5707963267948966 - taylor_atan(1.0 / ax)
+    }
+    f64 x2 = x * x
+    f64 term = x
+    f64 sum = x
+    int i = 1
+    while (i < 30) {
+        term = -term * x2
+        f64 d = 2 * i + 1
+        sum = sum + term / d
+        i = i + 1
+    }
+    return sum
+}
+
+# √a 牛顿迭代(二次收敛)
+pub fn taylor_sqrt(a: f64) f64 {
+    f64 x = 1.0
+    if (a > 1.0) {
+        x = a / 2.0
+    }
+    int i = 0
+    while (i < 30) {
+        x = (x + a / x) / 2.0
+        i = i + 1
+    }
+    return x
+}
+
+# π: Machin 公式 π = 16·arctan(1/5) - 4·arctan(1/239)(收敛极快)
+pub fn approx_pi() f64 {
+    return 16.0 * taylor_atan(0.2) - 4.0 * taylor_atan(1.0 / 239.0)
+}
+
+# e: 级数 e = Σ 1/n!(20 项)
+pub fn approx_e() f64 {
+    f64 sum = 1.0
+    f64 term = 1.0
+    int i = 1
+    while (i < 20) {
+        f64 fi = i
+        term = term / fi
+        sum = sum + term
+        i = i + 1
+    }
+    return sum
+}
+
+# φ: (1+√5)/2, √5 牛顿迭代
+pub fn approx_phi() f64 {
+    f64 x = 2.0
+    int i = 0
+    while (i < 20) {
+        x = (x + 5.0 / x) / 2.0
+        i = i + 1
+    }
+    return (1.0 + x) / 2.0
+}
+
+# φ 常量节点 kind=9(显示 φ, eval 用牛顿逼近)
+pub fn expr_phi() Expr {
+    Expr e = Expr()
+    e.kind = 9
+    e.num = std.algebra.bigint_from_i64(0)
+    e.den = std.algebra.bigint_from_i64(1)
+    e.en = std.algebra.bigint_from_i64(0)
+    e.ed = std.algebra.bigint_from_i64(1)
+    e.f = 0
+    return e
+}
+
+# ---- 数值求值 ----
+
+pub fn hp_scale() BigInt {
+    BigInt s = std.algebra.bigint_from_i64(1)
+    int i = 0
+    while (i < 50) {
+        BigInt t10 = std.algebra.bigint_from_i64(10)
+        s = std.algebra.bigint_multiply(&s, &t10)
+        i = i + 1
+    }
+    return s
+}
+
+# int → 高精度
+pub fn hp_from_int(i: int) BigInt {
+    BigInt b = std.algebra.bigint_from_i64(i)
+    BigInt s = hp_scale()
+    return std.algebra.bigint_multiply(&b, &s)
+}
+
+# 1 → 高精度
+pub fn hp_one() BigInt {
+    return hp_from_int(1)
+}
+
+# 高精度加(同精度直接加)
+pub fn hp_add(BigInt x, BigInt y) BigInt {
+    return std.algebra.bigint_add(&x, &y)
+}
+
+pub fn hp_sub(BigInt x, BigInt y) BigInt {
+    return std.algebra.bigint_subtract(&x, &y)
+}
+
+# 乘: X·Y / 10^P
+pub fn hp_mul(BigInt x, BigInt y) BigInt {
+    BigInt p = std.algebra.bigint_multiply(&x, &y)
+    BigInt s = hp_scale()
+    return std.algebra.bigint_divide(&p, &s)
+}
+
+# 除: x/y = X·10^P / Y
+pub fn hp_div(BigInt x, BigInt y) BigInt {
+    BigInt s = hp_scale()
+    BigInt p = std.algebra.bigint_multiply(&x, &s)
+    BigInt two = std.algebra.bigint_from_i64(2)
+    BigInt half = std.algebra.bigint_divide(&y, &two)
+    BigInt p2 = std.algebra.bigint_add(&p, &half)
+    return std.algebra.bigint_divide(&p2, &y)
+}
+
+# 高精度除以小整数 n(级数项用): X/n(截断)
+pub fn hp_div_int(BigInt x, int n) BigInt {
+    BigInt nb = std.algebra.bigint_from_i64(n)
+    BigInt two = std.algebra.bigint_from_i64(2)
+    BigInt half = std.algebra.bigint_divide(&nb, &two)
+    BigInt x2 = std.algebra.bigint_add(&x, &half)
+    return std.algebra.bigint_divide(&x2, &nb)
+}
+
+# ---- 高精度常数 ----
+
+# π: Machin 公式 π = 16·atan(1/5) - 4·atan(1/239)(收敛极快, 每项 5 位十进制)
+pub fn hp_pi() BigInt {
+    BigInt s5 = hp_from_int(5)
+    BigInt s239 = hp_from_int(239)
+    BigInt one = hp_one()
+    # atan(1/5): Σ(-1)ⁿ(1/5)^(2n+1)/(2n+1)
+    BigInt t5 = hp_div(one, s5)
+    BigInt sum5 = t5
+    BigInt x25 = hp_mul(t5, t5)
+    BigInt term = t5
+    int n = 1
+    while (n < 35) {
+        term = hp_mul(term, x25)
+        BigInt tt = hp_div_int(term, 2 * n + 1)
+        if (n % 2 == 1) {
+            sum5 = hp_sub(sum5, tt)
+        } else {
+            sum5 = hp_add(sum5, tt)
+        }
+        n = n + 1
+    }
+    # atan(1/239)
+    BigInt t239 = hp_div(one, s239)
+    BigInt sum239 = t239
+    BigInt x2_239 = hp_mul(t239, t239)
+    BigInt term2 = t239
+    int m = 1
+    while (m < 25) {
+        term2 = hp_mul(term2, x2_239)
+        BigInt tt2 = hp_div_int(term2, 2 * m + 1)
+        if (m % 2 == 1) {
+            sum239 = hp_sub(sum239, tt2)
+        } else {
+            sum239 = hp_add(sum239, tt2)
+        }
+        m = m + 1
+    }
+    # π = 16·sum5 - 4·sum239
+    BigInt f16 = hp_from_int(16)
+    BigInt f4 = hp_from_int(4)
+    BigInt p1 = hp_mul(f16, sum5)
+    BigInt p2 = hp_mul(f4, sum239)
+    return hp_sub(p1, p2)
+}
+
+# e: Σ 1/n!(n = 0..30)
+pub fn hp_e() BigInt {
+    BigInt sum = hp_one()
+    BigInt term = hp_one()
+    int n = 1
+    while (n < 60) {
+        term = hp_div_int(term, n)
+        sum = hp_add(sum, term)
+        n = n + 1
+    }
+    return sum
+}
+
+# √a 牛顿迭代(高精度定点开方)
+# 定点值 a = x·10^50; 内部 N = a·10^50 = x·10^100, √N = √x·10^50 直接就是定点
+# (若直接开 √(x·10^50), √N 整数只有 26 位, 定点精度只剩 25 位)
+pub fn hp_sqrt(BigInt a) BigInt {
+    # N = a · 10^50
+    BigInt s = hp_scale()
+    BigInt N = std.algebra.bigint_multiply(&a, &s)
+    int bl = std.algebra.bigint_bit_length(&N)
+    BigInt x = std.algebra.bigint_from_i64(1)
+    int k = 0
+    while (k < bl / 2) {
+        BigInt t2 = std.algebra.bigint_from_i64(2)
+        x = std.algebra.bigint_multiply(&x, &t2)
+        k = k + 1
+    }
+    int i = 0
+    while (i < 70) {
+        BigInt q = std.algebra.bigint_divide(&N, &x)
+        BigInt s2 = std.algebra.bigint_add(&x, &q)
+        BigInt two = std.algebra.bigint_from_i64(2)
+        x = std.algebra.bigint_divide(&s2, &two)
+        i = i + 1
+    }
+    return x
+}
+
+# ∛a 牛顿迭代(高精度定点开立方)
+# 定点值 a = x·10^50; 内部 N = a·10^100 = x·10^150, ∛N = ∛x·10^50 直接就是定点
+# x_{n+1} = (2x + N/x²)/3, 初始 x = 2^(bitlen(N)/3)
+pub fn hp_cbrt(BigInt a) BigInt {
+    # N = a · 10^100
+    BigInt s = hp_scale()
+    BigInt s2 = std.algebra.bigint_multiply(&s, &s)
+    BigInt N = std.algebra.bigint_multiply(&a, &s2)
+    int bl = std.algebra.bigint_bit_length(&N)
+    BigInt x = std.algebra.bigint_from_i64(1)
+    int k = 0
+    while (k < bl / 3) {
+        BigInt t2 = std.algebra.bigint_from_i64(2)
+        x = std.algebra.bigint_multiply(&x, &t2)
+        k = k + 1
+    }
+    int i = 0
+    while (i < 80) {
+        # x²
+        BigInt x2 = std.algebra.bigint_multiply(&x, &x)
+        # N / x²
+        BigInt q = std.algebra.bigint_divide(&N, &x2)
+        # 2x + q
+        BigInt two = std.algebra.bigint_from_i64(2)
+        BigInt t = std.algebra.bigint_multiply(&two, &x)
+        BigInt sum = std.algebra.bigint_add(&t, &q)
+        # / 3
+        BigInt three = std.algebra.bigint_from_i64(3)
+        x = std.algebra.bigint_divide(&sum, &three)
+        i = i + 1
+    }
+    return x
+}
+
+# φ = (1+√5)/2
+pub fn hp_phi() BigInt {
+    BigInt five = hp_from_int(5)
+    BigInt r5 = hp_sqrt(five)
+    BigInt one = hp_one()
+    BigInt s = hp_add(one, r5)
+    BigInt two = hp_from_int(2)
+    return hp_div(s, two)
+}
+
+# ---- 高精度级数(泰勒) ----
+
+# sin(x): x - x³/3! + x⁵/5! - ...(x 为高精度弧度)
+pub fn hp_sin(BigInt x) BigInt {
+    BigInt x2 = hp_mul(x, x)
+    BigInt term = x
+    BigInt sum = x
+    int n = 1
+    while (n < 40) {
+        term = hp_mul(term, x2)
+        int d1 = 2 * n
+        int d2 = 2 * n + 1
+        term = hp_div_int(term, d1 * d2)
+        if (n % 2 == 1) {
+            sum = hp_sub(sum, term)
+        } else {
+            sum = hp_add(sum, term)
+        }
+        n = n + 1
+    }
+    return sum
+}
+
+pub fn hp_cos(BigInt x) BigInt {
+    BigInt x2 = hp_mul(x, x)
+    BigInt term = hp_one()
+    BigInt sum = hp_one()
+    int n = 1
+    while (n < 40) {
+        term = hp_mul(term, x2)
+        int d1 = 2 * n - 1
+        int d2 = 2 * n
+        term = hp_div_int(term, d1 * d2)
+        if (n % 2 == 1) {
+            sum = hp_sub(sum, term)
+        } else {
+            sum = hp_add(sum, term)
+        }
+        n = n + 1
+    }
+    return sum
+}
+
+# exp(x): Σ xⁿ/n!
+pub fn hp_exp(BigInt x) BigInt {
+    BigInt term = hp_one()
+    BigInt sum = hp_one()
+    int n = 1
+    while (n < 30) {
+        term = hp_mul(term, x)
+        term = hp_div_int(term, n)
+        sum = hp_add(sum, term)
+        n = n + 1
+    }
+    return sum
+}
+
+# ln2 高精度(用 hp_ln(2) 自递归? 不行——用 atanh 级数直接: ln2 = 2·atanh(1/3))
+# sinh(x) = Σ x^(2n+1)/(2n+1)!(全正号)
+pub fn hp_sinh(BigInt x) BigInt {
+    BigInt x2 = hp_mul(x, x)
+    BigInt term = x
+    BigInt sum = x
+    int n = 1
+    while (n < 40) {
+        term = hp_mul(term, x2)
+        int d1 = 2 * n
+        int d2 = 2 * n + 1
+        term = hp_div_int(term, d1 * d2)
+        sum = hp_add(sum, term)
+        n = n + 1
+    }
+    return sum
+}
+
+# cosh(x) = Σ x^(2n)/(2n)!
+pub fn hp_cosh(BigInt x) BigInt {
+    BigInt x2 = hp_mul(x, x)
+    BigInt term = hp_one()
+    BigInt sum = hp_one()
+    int n = 1
+    while (n < 40) {
+        term = hp_mul(term, x2)
+        int d1 = 2 * n - 1
+        int d2 = 2 * n
+        term = hp_div_int(term, d1 * d2)
+        sum = hp_add(sum, term)
+        n = n + 1
+    }
+    return sum
+}
+
+# tanh(x) = sinh(x)/cosh(x)
+pub fn hp_tanh(BigInt x) BigInt {
+    BigInt sh = hp_sinh(x)
+    BigInt ch = hp_cosh(x)
+    return hp_div(sh, ch)
+}
+
+# arsinh(x) = ln(x + √(x²+1))
+pub fn hp_arsinh(BigInt x) BigInt {
+    BigInt one = hp_one()
+    BigInt x2 = hp_mul(x, x)
+    BigInt t = hp_add(x2, one)
+    BigInt r = hp_sqrt(t)
+    BigInt s = hp_add(x, r)
+    return hp_ln(s)
+}
+
+# arcosh(x) = ln(x + √(x²-1))
+pub fn hp_arcosh(BigInt x) BigInt {
+    BigInt one = hp_one()
+    BigInt x2 = hp_mul(x, x)
+    BigInt t = hp_sub(x2, one)
+    BigInt r = hp_sqrt(t)
+    BigInt s = hp_add(x, r)
+    return hp_ln(s)
+}
+
+# artanh(x) = ½·ln((1+x)/(1-x))
+pub fn hp_artanh(BigInt x) BigInt {
+    BigInt one = hp_one()
+    BigInt np = hp_add(one, x)
+    BigInt nm = hp_sub(one, x)
+    BigInt q = hp_div(np, nm)
+    BigInt l = hp_ln(q)
+    BigInt two = hp_from_int(2)
+    return hp_div(l, two)
+}
+
+pub fn hp_ln2() BigInt {
+    BigInt one = hp_one()
+    BigInt three = hp_from_int(3)
+    BigInt z = hp_div(one, three)
+    BigInt z2 = hp_mul(z, z)
+    BigInt term = z
+    BigInt sum = z
+    int i = 1
+    while (i < 100) {
+        term = hp_mul(term, z2)
+        BigInt tt = hp_div_int(term, 2 * i + 1)
+        sum = hp_add(sum, tt)
+        i = i + 1
+    }
+    BigInt two = hp_from_int(2)
+    return hp_mul(two, sum)
+}
+
+# ln(x): 范围缩小 ln(x) = ln(m) + k·ln2(m ∈ [1,2)), atanh 级数
+pub fn hp_ln(BigInt x) BigInt {
+    BigInt two = hp_from_int(2)
+    BigInt m = x
+    BigInt k = hp_from_int(0)
+    BigInt ln2 = hp_ln2()
+    # 缩小到 [1, 2)
+    int cmp2 = std.algebra.bigint_compare(&m, &two)
+    while (cmp2 >= 0) {
+        m = hp_div(m, two)
+        k = hp_add(k, hp_one())
+        cmp2 = std.algebra.bigint_compare(&m, &two)
+    }
+    BigInt one = hp_one()
+    int cmp1 = std.algebra.bigint_compare(&m, &one)
+    while (cmp1 < 0) {
+        m = hp_mul(m, two)
+        k = hp_sub(k, hp_one())
+        cmp1 = std.algebra.bigint_compare(&m, &one)
+    }
+    # ln(m) = 2·(z + z³/3 + ...), z = (m-1)/(m+1)
+    BigInt num = hp_sub(m, one)
+    BigInt den = hp_add(m, one)
+    BigInt z = hp_div(num, den)
+    BigInt z2 = hp_mul(z, z)
+    BigInt term = z
+    BigInt sum = z
+    int i = 1
+    while (i < 100) {
+        term = hp_mul(term, z2)
+        BigInt tt = hp_div_int(term, 2 * i + 1)
+        sum = hp_add(sum, tt)
+        i = i + 1
+    }
+    BigInt two2 = hp_from_int(2)
+    BigInt lnm = hp_mul(two2, sum)
+    # ln(x) = ln(m) + k·ln2
+    BigInt kl = hp_mul(k, ln2)
+    return hp_add(lnm, kl)
+}
+
+# arctan(x): 欧拉级数 Σ(-1)ⁿx^(2n+1)/(2n+1), |x|>1 用 arctan(x)=π/2-arctan(1/x)
+pub fn hp_atan(BigInt x) BigInt {
+    BigInt one = hp_one()
+    BigInt zero = hp_from_int(0)
+    BigInt ax = x
+    int neg = std.algebra.bigint_is_negative(&ax)
+    if (neg == 1) {
+        ax = std.algebra.bigint_negate(&ax)
+    }
+    int c1 = std.algebra.bigint_compare(&ax, &one)
+    if (c1 == 0) {
+        # atan(1) = π/4(级数在 x=1 收敛极慢, 直接用 π)
+        BigInt pi2 = hp_pi()
+        BigInt f4 = hp_from_int(4)
+        BigInt r4 = hp_div(pi2, f4)
+        if (neg == 1) {
+            return hp_sub(zero, r4)
+        }
+        return r4
+    }
+    if (c1 > 0) {
+        # π/2 - atan(1/x)
+        BigInt rx = hp_div(one, ax)
+        BigInt at = hp_atan(rx)
+        BigInt pi2 = hp_pi()
+        BigInt two = hp_from_int(2)
+        BigInt half = hp_div(pi2, two)
+        BigInt r = hp_sub(half, at)
+        if (neg == 1) {
+            return hp_sub(zero, r)
+        }
+        return r
+    }
+    BigInt x2 = hp_mul(x, x)
+    BigInt term = x
+    BigInt sum = x
+    int i = 1
+    while (i < 120) {
+        term = hp_mul(term, x2)
+        BigInt tt = hp_div_int(term, 2 * i + 1)
+        if (i % 2 == 1) {
+            sum = hp_sub(sum, tt)
+        } else {
+            sum = hp_add(sum, tt)
+        }
+        i = i + 1
+    }
+    return sum
+}
+
+# arcsin(x) = arctan(x/√(1-x²))
+pub fn hp_asin(BigInt x) BigInt {
+    BigInt one = hp_one()
+    BigInt x2 = hp_mul(x, x)
+    BigInt d = hp_sub(one, x2)
+    BigInt r = hp_sqrt(d)
+    BigInt q = hp_div(x, r)
+    return hp_atan(q)
+}
+
+# arccos(x) = π/2 - arcsin(x)
+pub fn hp_acos(BigInt x) BigInt {
+    BigInt asv = hp_asin(x)
+    BigInt pi2 = hp_pi()
+    BigInt two = hp_from_int(2)
+    BigInt half = hp_div(pi2, two)
+    return hp_sub(half, asv)
+}
+
+# ln(10)(供 log10)
+pub fn hp_ln10() BigInt {
+    BigInt ten = hp_from_int(10)
+    return hp_ln(ten)
+}
+
+# ---- 输出: 整数部分 + "." + 逐位小数(补前导 0, 负数先打符号) ----
+pub fn hp_print(BigInt x) {
+    BigInt ax = x
+    int neg = std.algebra.bigint_is_negative(&ax)
+    if (neg == 1) {
+        ax = std.algebra.bigint_negate(&ax)
+        println("-")
+    }
+    BigInt s = hp_scale()
+    BigInt ip = std.algebra.bigint_divide(&ax, &s)
+    BigInt r = std.algebra.bigint_mod(&ax, &s)
+    println(std.algebra.bigint_to_string(&ip))
+    println(".")
+    int i = 0
+    while (i < 50) {
+        BigInt t10 = std.algebra.bigint_from_i64(10)
+        BigInt r10 = std.algebra.bigint_multiply(&r, &t10)
+        BigInt qd = std.algebra.bigint_divide(&r10, &s)
+        println(std.algebra.bigint_to_string(&qd))
+        r = std.algebra.bigint_mod(&r10, &s)
+        i = i + 1
+    }
+}
+
+
+pub fn eval_hp(e: Expr) BigInt {
+    if (e.kind == 0) {
+        # num/den 精确分数 → 定点除法(BigInt 字段直接用)
+        return hp_div(e.num, e.den)
+    }
+    if (e.kind == 1) {
+        # √ 用牛顿迭代; ∛ 用开立方牛顿; 其他幂用整数幂+开方(仅支持 √、∛ 和整数幂)
+        # 注意: num 是符号原始值, 开方需要定点输入(×10^50)
+        BigInt sc = hp_scale()
+        BigInt b = std.algebra.bigint_multiply(&e.num, &sc)
+        if (std.algebra.bigint_to_i64(&e.ed) == 2 && std.algebra.bigint_to_i64(&e.en) == 1) {
+            return hp_sqrt(b)
+        }
+        if (std.algebra.bigint_to_i64(&e.ed) == 3 && std.algebra.bigint_to_i64(&e.en) == 1) {
+            return hp_cbrt(b)
+        }
+        # b^(en/ed): b^en 开 ed 次方(仅整数次幂精确)
+        if (std.algebra.bigint_to_i64(&e.ed) == 1) {
+            BigInt r = hp_one()
+            int i = 0
+            while (i < std.algebra.bigint_to_i64(&e.en)) {
+                r = hp_mul(r, b)
+                i = i + 1
+            }
+            return r
+        }
+        return hp_from_int(0)
+    }
+    if (e.kind == 2) {
+        return hp_pi()
+    }
+    if (e.kind == 3) {
+        return hp_e()
+    }
+    if (e.kind == 9) {
+        return hp_phi()
+    }
+    if (e.kind == 4) {
+        BigInt v = eval_hp(*e.a)
+        if (e.f == 0) {
+            return hp_sin(v)
+        }
+        if (e.f == 1) {
+            return hp_cos(v)
+        }
+        if (e.f == 2) {
+            BigInt s = hp_sin(v)
+            BigInt c = hp_cos(v)
+            return hp_div(s, c)
+        }
+        if (e.f == 3) {
+            return hp_asin(v)
+        }
+        if (e.f == 4) {
+            return hp_acos(v)
+        }
+        if (e.f == 5) {
+            return hp_atan(v)
+        }
+        if (e.f == 6) {
+            return hp_ln(v)
+        }
+        if (e.f == 7) {
+            BigInt l1 = hp_ln(v)
+            BigInt l2 = hp_ln10()
+            return hp_div(l1, l2)
+        }
+        if (e.f == 8) {
+            return hp_exp(v)
+        }
+        if (e.f == 9) {
+            return hp_sinh(v)
+        }
+        if (e.f == 10) {
+            return hp_cosh(v)
+        }
+        if (e.f == 11) {
+            return hp_tanh(v)
+        }
+        if (e.f == 12) {
+            return hp_arsinh(v)
+        }
+        if (e.f == 13) {
+            return hp_arcosh(v)
+        }
+        if (e.f == 14) {
+            return hp_artanh(v)
+        }
+        return hp_from_int(0)
+    }
+    if (e.kind == 5) {
+        BigInt a = eval_hp(*e.a)
+        BigInt b = eval_hp(*e.b)
+        return hp_add(a, b)
+    }
+    if (e.kind == 6) {
+        BigInt a = eval_hp(*e.a)
+        BigInt b = eval_hp(*e.b)
+        return hp_mul(a, b)
+    }
+    if (e.kind == 7) {
+        BigInt a = eval_hp(*e.a)
+        BigInt z = hp_from_int(0)
+        return hp_sub(z, a)
+    }
+    if (e.kind == 8) {
+        BigInt a = eval_hp(*e.a)
+        BigInt b = eval_hp(*e.b)
+        return hp_div(a, b)
+    }
+    return hp_from_int(0)
+}
+
+# BigInt 定点 → f64(兼容层: 取高 15 位有效数字转)
+pub fn hp_to_f64(BigInt x) f64 {
+    BigInt s = hp_scale()
+    # 取整数部分
+    BigInt ip = std.algebra.bigint_divide(&x, &s)
+    BigInt fp = std.algebra.bigint_mod(&x, &s)
+    # 小数部分取前 15 位: fp / 10^35
+    BigInt e35 = hp_pow10(35)
+    BigInt f15 = std.algebra.bigint_divide(&fp, &e35)
+    i64 fv = std.algebra.bigint_to_i64(&f15)
+    i64 iv = std.algebra.bigint_to_i64(&ip)
+    f64 r = iv
+    f64 f = fv
+    f = f / 1e15
+    if (r >= 0) {
+        return r + f
+    }
+    return r - f
+}
+
+# 近似值显示: ≈ 数值(高精度大数运算, 默认 display 是符号精确)
+pub fn eval(e: Expr) f64 {
+    # 内部全走高精度大数运算(eval_hp), 转 f64 仅作兼容层
+    BigInt h = eval_hp(e)
+    return hp_to_f64(h)
+}
+
+# ---- 高精度求值(代数库全部大数运算, 50 位定点) ----
+# 符号表达式 → BigInt 定点(10^50): 不损失精度
+
+pub fn display_v(e: Expr) {
+    println("≈")
+    BigInt h = eval_hp(e)
+    hp_print(h)
+}
+
+# 10^k
+pub fn hp_pow10(int k) BigInt {
+    BigInt s = std.algebra.bigint_from_i64(1)
+    int i = 0
+    while (i < k) {
+        BigInt t10 = std.algebra.bigint_from_i64(10)
+        s = std.algebra.bigint_multiply(&s, &t10)
+        i = i + 1
+    }
+    return s
+}
+
+
+pub fn display(e: Expr) {
+    if (e.kind == 0) {
+        if (std.algebra.bigint_to_i64(&e.den) == 1) {
+            println(std.algebra.bigint_to_string(&e.num))
+        } else {
+            println(std.algebra.bigint_to_string(&e.num))
+            println("/")
+            println(std.algebra.bigint_to_string(&e.den))
+        }
+        return
+    }
+    if (e.kind == 1) {
+        # √ 形式
+        int edv = std.algebra.bigint_to_i64(&e.ed)
+        int env = std.algebra.bigint_to_i64(&e.en)
+        i64 numv = std.algebra.bigint_to_i64(&e.num)
+        if (edv == 2 && env == 1) {
+            if (numv == 2) {
+                println("√2")
+            }
+            if (numv == 3) {
+                println("√3")
+            }
+            if (numv == 5) {
+                println("√5")
+            }
+            if (numv != 2 && numv != 3 && numv != 5) {
+                println("√")
+                println(std.algebra.bigint_to_string(&e.num))
+            }
+            return
+        }
+        # ∛ 形式
+        if (edv == 3 && env == 1) {
+            println("∛")
+            println(std.algebra.bigint_to_string(&e.num))
+            return
+        }
+        if (edv == 1) {
+            println(std.algebra.bigint_to_string(&e.num))
+            return
+        }
+        println(std.algebra.bigint_to_string(&e.num))
+        return
+    }
+    if (e.kind == 2) {
+        println("π")
+        return
+    }
+    if (e.kind == 3) {
+        println("e")
+        return
+    }
+    if (e.kind == 4) {
+        if (e.f == 0) {
+            println("sin(")
+        }
+        if (e.f == 1) {
+            println("cos(")
+        }
+        if (e.f == 2) {
+            println("tan(")
+        }
+        if (e.f == 3) {
+            println("arcsin(")
+        }
+        if (e.f == 4) {
+            println("arccos(")
+        }
+        if (e.f == 5) {
+            println("arctan(")
+        }
+        if (e.f == 6) {
+            println("ln(")
+        }
+        if (e.f == 7) {
+            println("log10(")
+        }
+        if (e.f == 8) {
+            println("exp(")
+        }
+        if (e.f == 9) {
+            println("sinh(")
+        }
+        if (e.f == 10) {
+            println("cosh(")
+        }
+        if (e.f == 11) {
+            println("tanh(")
+        }
+        if (e.f == 12) {
+            println("arsinh(")
+        }
+        if (e.f == 13) {
+            println("arcosh(")
+        }
+        if (e.f == 14) {
+            println("artanh(")
+        }
+        display(*e.a)
+        println(")")
+        return
+    }
+    if (e.kind == 5) {
+        display(*e.a)
+        println("+")
+        display(*e.b)
+        return
+    }
+    if (e.kind == 6) {
+        display(*e.a)
+        println("*")
+        display(*e.b)
+        return
+    }
+    if (e.kind == 7) {
+        println("-")
+        display(*e.a)
+        return
+    }
+    if (e.kind == 8) {
+        display(*e.a)
+        println("/")
+        display(*e.b)
+        return
+    }
+    println("?")
+}
+
+# ---- 工具 ----
+
+pub fn gcd_abs(a: int, b: int) int {
+    int x = a
+    int y = b
+    if (x < 0) {
+        x = -x
+    }
+    if (y < 0) {
+        y = -y
+    }
+    while (y > 0) {
+        int t = x % y
+        x = y
+        y = t
+    }
+    if (x == 0) {
+        return 1
+    }
+    return x
+}
+
+
+# ---- 对外构造(自动化简): 构造即化简, 不需要手动调 simplify ----
+
+# 和: x + y(自动合并同类项)
+pub fn expr_add(x: Expr, y: Expr) Expr {
+    return simplify(expr_add_raw(x, y))
+}
+
+# 积: x × y(自动约分/合并)
+pub fn expr_mul(x: Expr, y: Expr) Expr {
+    return simplify(expr_mul_raw(x, y))
+}
+
+# 差: x - y(自动化简)
+pub fn expr_sub(x: Expr, y: Expr) Expr {
+    return simplify(expr_add_raw(x, expr_mul_raw(expr_rat(-1, 1), y)))
+}
+
+# 商: x / y(常数自动约分, 其他保持符号)
+pub fn expr_div(x: Expr, y: Expr) Expr {
+    return simplify(expr_div_raw(x, y))
+}
+
+# ---- 有理数(大数)并入代数库 ----
+# Rational = num/den(BigInt 变长: ≤64 位单 limb, 超过自动扩展)
+# 构造时 gcd 约分 + 分母>0 符号归一; add/sub(通分)/mul/div(交叉)/neg/inverse/to_f64/dec/print
+
+pub class Rational {
+    num: BigInt
+    den: BigInt
+
+    # 约分 + 符号归一
+    constructor(BigInt n, BigInt d) {
+        # d == 0 归零
+        int zero = std.algebra.bigint_is_zero(&d)
+        if (zero == 1) {
+            self.num = std.algebra.bigint_from_i64(0)
+            self.den = std.algebra.bigint_from_i64(1)
+            return
+        }
+        BigInt g = std.algebra.bigint_gcd(&n, &d)
+        BigInt one = std.algebra.bigint_from_i64(1)
+        int g1 = std.algebra.bigint_compare(&g, &one)
+        if (g1 != 1) {
+            self.num = n
+            self.den = d
+        } else {
+            self.num = std.algebra.bigint_divide(&n, &g)
+            self.den = std.algebra.bigint_divide(&d, &g)
+        }
+        # 分母 < 0 → 分子分母同时取反
+        int neg = std.algebra.bigint_is_negative(&self.den)
+        if (neg == 1) {
+            self.num = std.algebra.bigint_negate(&self.num)
+            self.den = std.algebra.bigint_negate(&self.den)
+        }
+    }
+
+    fn add(Rational other) Rational {
+        # a/b + c/d = (ad + bc) / bd
+        BigInt ad = std.algebra.bigint_multiply(&self.num, &other.den)
+        BigInt bc = std.algebra.bigint_multiply(&self.den, &other.num)
+        BigInt num = std.algebra.bigint_add(&ad, &bc)
+        BigInt bd = std.algebra.bigint_multiply(&self.den, &other.den)
+        return Rational(num, bd)
+    }
+
+    fn sub(Rational other) Rational {
+        BigInt neg = std.algebra.bigint_negate(&other.num)
+        BigInt ad = std.algebra.bigint_multiply(&self.num, &other.den)
+        BigInt bc = std.algebra.bigint_multiply(&self.den, &neg)
+        BigInt num = std.algebra.bigint_add(&ad, &bc)
+        BigInt bd = std.algebra.bigint_multiply(&self.den, &other.den)
+        return Rational(num, bd)
+    }
+
+    fn mul(Rational other) Rational {
+        BigInt num = std.algebra.bigint_multiply(&self.num, &other.num)
+        BigInt den = std.algebra.bigint_multiply(&self.den, &other.den)
+        return Rational(num, den)
+    }
+
+    fn div(Rational other) Rational {
+        BigInt num = std.algebra.bigint_multiply(&self.num, &other.den)
+        BigInt den = std.algebra.bigint_multiply(&self.den, &other.num)
+        return Rational(num, den)
+    }
+
+    fn neg() Rational {
+        BigInt n = std.algebra.bigint_negate(&self.num)
+        return Rational(n, self.den)
+    }
+
+    fn inverse() Rational {
+        return Rational(self.den, self.num)
+    }
+
+    fn to_f64() f64 {
+        i64 n = std.algebra.bigint_to_i64(&self.num)
+        i64 d = std.algebra.bigint_to_i64(&self.den)
+        f64 x = n
+        return x / d
+    }
+
+    fn print() {
+        println(std.algebra.bigint_to_string(&self.num))
+        println("/")
+        println(std.algebra.bigint_to_string(&self.den))
+    }
+
+    # 高精度小数: num/den 输出 digits 位(BigInt 长除法, 不受 f64 限制)
+    fn dec(int digits) {
+        BigInt q = std.algebra.bigint_divide(&self.num, &self.den)
+        BigInt r = std.algebra.bigint_mod(&self.num, &self.den)
+        println(std.algebra.bigint_to_string(&q))
+        println(".")
+        BigInt ten = std.algebra.bigint_from_i64(10)
+        int i = 0
+        while (i < digits) {
+            BigInt r10 = std.algebra.bigint_multiply(&r, &ten)
+            BigInt qd = std.algebra.bigint_divide(&r10, &self.den)
+            println(std.algebra.bigint_to_string(&qd))
+            r = std.algebra.bigint_mod(&r10, &self.den)
+            i = i + 1
+        }
+    }
+}
+
+# 便捷工厂: 从 int 构造(≤64 位场景)
+pub fn rat(i: int, d: int) Rational {
+    return Rational(std.algebra.bigint_from_i64(i), std.algebra.bigint_from_i64(d))
+}
+
+# 便捷工厂: 从 BigInt 构造
+pub fn rat_b(n: BigInt, d: BigInt) Rational {
+    return Rational(n, d)
+}
+
+# ---- 函数构造(对外, 自动化简: 诱导公式/特殊值表自动生效) ----
+
+pub fn expr_fn(fnid: int, arg: Expr) Expr {
+    return simplify(expr_fn_raw(fnid, arg))
+}
+
+# 角度模式: fnid 函数在角度(度)下计算, 30° → π/6 精确化简
+# 弧度用 expr_fn(fnid, 弧度表达式); 角度用 expr_fn_deg(fnid, 度数)
+pub fn expr_fn_deg(fnid: int, deg: int) Expr {
+    Expr ang = expr_div_raw(expr_mul_raw(expr_rat(deg, 1), expr_pi()), expr_rat(180, 1))
+    return simplify(expr_fn_raw(fnid, ang))
+}
+
+# 幂构造(对外, 自动化简: √8 → 2√2, 指数约分)
+pub fn expr_pow(base: int, en0: int, ed0: int) Expr {
+    return simplify(expr_pow_raw(base, en0, ed0))
+}
